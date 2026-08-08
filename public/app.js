@@ -17,6 +17,12 @@ let gameState = null;
 let session = readSession();
 let lastResumeSocketId = null;
 let lastSpokenRoundId = null;
+let pendingSpeechRound = null;
+let speechUnlocked = false;
+let speechUnlocking = false;
+let activeUtterance = null;
+let requestedSpeechRoundId = null;
+let speechWarningShown = false;
 let soundEnabled = localStorage.getItem(SOUND_KEY) !== 'off';
 let countdownTimer = null;
 
@@ -202,9 +208,13 @@ function renderGameStage() {
       const card = node(isJudge ? 'button' : 'div', 'white-card answer-card');
       if (isJudge) {
         card.type = 'button';
-        card.addEventListener('click', () => selectWinner(answer.playerId));
+        card.addEventListener('click', () => {
+          const filledText = round.question.replace(/_+/, answer.text);
+          speakSelectedAnswer(filledText, round.id);
+          selectWinner(answer.id);
+        });
       }
-      card.append(node('span', '', answer.text), node('span', 'answer-owner', answer.nick));
+      card.append(node('span', '', answer.text));
       grid.append(card);
     }
     shell.append(grid);
@@ -215,7 +225,14 @@ function renderGameStage() {
       node('h2', '', round.winner.filledText),
       node('p', '', `${round.winner.nick} +1 分`)
     );
-    shell.append(reveal, node('div', 'countdown', '',));
+    const answerHeading = node('h3', 'revealed-answers-heading', '本轮全部答案');
+    const answerGrid = node('div', 'answers-grid revealed-answers');
+    for (const answer of round.answers) {
+      const card = node('div', `white-card answer-card${answer.isWinner ? ' winner-answer' : ''}`);
+      card.append(node('span', '', answer.text), node('span', 'answer-owner', answer.nick));
+      answerGrid.append(card);
+    }
+    shell.append(reveal, answerHeading, answerGrid, node('div', 'countdown', '',));
     shell.lastChild.id = 'roundCountdown';
     startCountdown(round.winner.revealEndsAt);
     speakReveal(round);
@@ -289,8 +306,8 @@ async function submitCard(cardId) {
   if (result) showToast('答案已提交', 'success');
 }
 
-async function selectWinner(playerId) {
-  await runAction('select-winner', { playerId });
+async function selectWinner(answerId) {
+  await runAction('select-winner', { answerId });
 }
 
 function stopCountdown() {
@@ -311,13 +328,129 @@ function startCountdown(endsAt) {
   countdownTimer = setInterval(tick, 250);
 }
 
-function speakReveal(round) {
-  if (!soundEnabled || lastSpokenRoundId === round.id || !window.speechSynthesis) return;
-  lastSpokenRoundId = round.id;
-  window.speechSynthesis.cancel();
-  const utterance = new SpeechSynthesisUtterance(round.winner.filledText);
+function speechSupported() {
+  return 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window;
+}
+
+function reportUnsupportedSpeech() {
+  if (speechWarningShown) return;
+  speechWarningShown = true;
+  showToast('当前浏览器不支持语音，请使用系统 Safari、Chrome 或 Edge 打开', 'warning');
+}
+
+function chineseVoice() {
+  if (!speechSupported()) return null;
+  const voices = window.speechSynthesis.getVoices();
+  return voices.find(voice => voice.lang.toLowerCase() === 'zh-cn')
+    || voices.find(voice => voice.lang.toLowerCase().startsWith('zh'))
+    || null;
+}
+
+function unlockSpeech() {
+  if (!soundEnabled || speechUnlocked || speechUnlocking) return;
+  if (!speechSupported()) return reportUnsupportedSpeech();
+
+  speechUnlocking = true;
+  window.speechSynthesis.resume();
+  const confirmation = new SpeechSynthesisUtterance('语音播报已开启');
+  activeUtterance = confirmation;
+  confirmation.lang = 'zh-CN';
+  const voice = chineseVoice();
+  if (voice) confirmation.voice = voice;
+
+  let unlockTimer;
+  const finishUnlock = success => {
+    if (activeUtterance !== confirmation) return;
+    clearTimeout(unlockTimer);
+    speechUnlocking = false;
+    activeUtterance = null;
+    speechUnlocked = success;
+    updateSoundButton();
+    if (success && pendingSpeechRound) speakReveal(pendingSpeechRound);
+  };
+  confirmation.onstart = () => {
+    speechUnlocked = true;
+    updateSoundButton();
+  };
+  confirmation.onend = () => finishUnlock(true);
+  confirmation.onerror = event => {
+    finishUnlock(false);
+    showToast(`语音启用失败：${event.error || '浏览器拒绝播放'}`, 'warning');
+  };
+  unlockTimer = setTimeout(() => {
+    if (activeUtterance !== confirmation) return;
+    if (speechUnlocked) finishUnlock(true);
+    else {
+      finishUnlock(false);
+      showToast('语音引擎没有响应，请使用系统 Safari、Chrome 或 Edge 打开', 'warning');
+    }
+  }, 3_000);
+  window.speechSynthesis.speak(confirmation);
+}
+
+function handleSpeechGesture(event) {
+  if (gameView.classList.contains('hidden')) return;
+  if (event.target.closest?.('#soundBtn, .answer-card')) return;
+  unlockSpeech();
+  if (pendingSpeechRound) speakReveal(pendingSpeechRound);
+}
+
+function speakAnswerText(text, roundId) {
+  window.speechSynthesis.resume();
+  const utterance = new SpeechSynthesisUtterance(text);
+  activeUtterance = utterance;
+  requestedSpeechRoundId = roundId;
   utterance.lang = 'zh-CN';
+  const voice = chineseVoice();
+  if (voice) utterance.voice = voice;
+  utterance.onstart = () => {
+    lastSpokenRoundId = roundId;
+    pendingSpeechRound = null;
+  };
+  utterance.onerror = () => {
+    if (activeUtterance === utterance) activeUtterance = null;
+    requestedSpeechRoundId = null;
+  };
+  utterance.onend = () => {
+    if (activeUtterance === utterance) activeUtterance = null;
+  };
   window.speechSynthesis.speak(utterance);
+}
+
+function speakSelectedAnswer(text, roundId) {
+  if (!soundEnabled || lastSpokenRoundId === roundId) return;
+  if (!speechSupported()) return reportUnsupportedSpeech();
+
+  speechUnlocked = true;
+  speechUnlocking = false;
+  updateSoundButton();
+  speakAnswerText(text, roundId);
+}
+
+function speakReveal(round) {
+  if (!soundEnabled
+      || lastSpokenRoundId === round.id
+      || requestedSpeechRoundId === round.id
+      || !speechSupported()) return;
+  pendingSpeechRound = round;
+  if (!speechUnlocked) return;
+  speakAnswerText(round.winner.filledText, round.id);
+}
+
+function updateSoundButton() {
+  const button = $('soundBtn');
+  const currentIcon = button.querySelector('svg, i');
+  const icon = node('i');
+  icon.dataset.lucide = soundEnabled ? 'volume-2' : 'volume-x';
+  icon.setAttribute('aria-hidden', 'true');
+  if (currentIcon) currentIcon.replaceWith(icon);
+  else button.prepend(icon);
+  if (!speechSupported()) button.title = '当前浏览器不支持语音播报';
+  else if (soundEnabled && !speechUnlocked) button.title = '点击启用语音播报';
+  else button.title = soundEnabled ? '关闭语音播报' : '开启语音播报';
+  button.setAttribute('aria-label', button.title);
+  button.classList.toggle('accent', soundEnabled && !speechUnlocked && speechSupported());
+  refreshIcons();
 }
 
 async function resumeSession() {
@@ -351,6 +484,7 @@ $('joinModeBtn').addEventListener('click', () => setLobbyMode('join'));
 
 $('lobbyForm').addEventListener('submit', async event => {
   event.preventDefault();
+  unlockSpeech();
   $('lobbyError').textContent = '';
   const nick = $('nicknameInput').value.trim();
   const roomId = (lobbyMode === 'create' ? $('customRoomInput').value : $('joinRoomInput').value).trim();
@@ -444,13 +578,32 @@ $('freeAnswerForm').addEventListener('submit', async event => {
 $('closeFreeAnswerBtn').addEventListener('click', () => $('freeAnswerDialog').close());
 
 $('soundBtn').addEventListener('click', () => {
+  if (soundEnabled && !speechUnlocked) {
+    unlockSpeech();
+    updateSoundButton();
+    return;
+  }
   soundEnabled = !soundEnabled;
   localStorage.setItem(SOUND_KEY, soundEnabled ? 'on' : 'off');
-  const icon = $('soundBtn').querySelector('svg');
-  if (icon) icon.outerHTML = `<i data-lucide="${soundEnabled ? 'volume-2' : 'volume-x'}" aria-hidden="true"></i>`;
-  $('soundBtn').title = soundEnabled ? '关闭语音播报' : '开启语音播报';
-  refreshIcons();
+  if (soundEnabled) {
+    unlockSpeech();
+    if (gameState?.round?.phase === 'reveal') speakReveal(gameState.round);
+  } else if (speechSupported()) {
+    pendingSpeechRound = null;
+    speechUnlocking = false;
+    activeUtterance = null;
+    requestedSpeechRoundId = null;
+    window.speechSynthesis.cancel();
+  }
+  updateSoundButton();
 });
+
+document.addEventListener('click', handleSpeechGesture, { capture: true });
+if (speechSupported()) {
+  window.speechSynthesis.addEventListener?.('voiceschanged', () => {
+    if (pendingSpeechRound) speakReveal(pendingSpeechRound);
+  });
+}
 
 const roomFromUrl = new URLSearchParams(location.search).get('room');
 if (roomFromUrl && !session) {
@@ -461,4 +614,4 @@ if (roomFromUrl && !session) {
 }
 
 setConnectionStatus(socket.connected);
-refreshIcons();
+updateSoundButton();

@@ -84,10 +84,19 @@ function createGameServer(options = {}) {
     if (!round) return null;
 
     const submittedIds = new Set(round.answers.keys());
-    const answerList = round.answerOrder.map(playerId => {
-      const answer = round.answers.get(playerId);
-      const answerPlayer = room.players.get(playerId);
-      return answer && answerPlayer ? { playerId, nick: answerPlayer.nick, text: answer } : null;
+    const answerList = round.answerOptions.map(option => {
+      const answer = round.answers.get(option.playerId);
+      if (!answer) return null;
+      if (round.phase === 'judging') return { id: option.id, text: answer };
+
+      const answerPlayer = room.players.get(option.playerId);
+      return answerPlayer ? {
+        id: option.id,
+        playerId: option.playerId,
+        nick: answerPlayer.nick,
+        text: answer,
+        isWinner: option.playerId === round.winnerPlayerId
+      } : null;
     }).filter(Boolean);
     const winner = round.winnerPlayerId ? room.players.get(round.winnerPlayerId) : null;
 
@@ -106,6 +115,7 @@ function createGameServer(options = {}) {
         && round.freeCardPlayerIds.has(player.id)
         && !submittedIds.has(player.id),
       winner: winner ? {
+        answerId: round.answerOptions.find(option => option.playerId === winner.id)?.id,
         playerId: winner.id,
         nick: winner.nick,
         text: round.answers.get(winner.id),
@@ -205,7 +215,7 @@ function createGameServer(options = {}) {
       hands,
       freeCardPlayerIds,
       answers: new Map(),
-      answerOrder: [],
+      answerOptions: [],
       winnerPlayerId: null,
       revealEndsAt: null
     };
@@ -219,7 +229,10 @@ function createGameServer(options = {}) {
     const expectedIds = round.participantIds.filter(id => id !== round.judgePlayerId);
     if (!expectedIds.every(id => round.answers.has(id))) return;
     round.phase = 'judging';
-    round.answerOrder = shuffle(expectedIds);
+    round.answerOptions = shuffle(expectedIds).map(playerId => ({
+      id: crypto.randomUUID(),
+      playerId
+    }));
     broadcastState(room);
   }
 
@@ -252,7 +265,7 @@ function createGameServer(options = {}) {
       room.round.hands.delete(playerId);
       room.round.freeCardPlayerIds.delete(playerId);
       room.round.answers.delete(playerId);
-      room.round.answerOrder = room.round.answerOrder.filter(id => id !== playerId);
+      room.round.answerOptions = room.round.answerOptions.filter(option => option.playerId !== playerId);
       if (wasJudge) {
         clearRevealTimer(room);
         room.round = null;
@@ -414,9 +427,12 @@ function createGameServer(options = {}) {
       const round = room.round;
       if (!round || round.phase !== 'judging') return actionResult(callback, false, '当前不是裁决阶段');
       if (player.id !== round.judgePlayerId) return actionResult(callback, false, '只有本轮裁判可以选择赢家');
-      if (!round.answers.has(payload.playerId)) return actionResult(callback, false, '答案不存在');
+      const selectedAnswer = round.answerOptions.find(option => option.id === payload.answerId);
+      if (!selectedAnswer || !round.answers.has(selectedAnswer.playerId)) {
+        return actionResult(callback, false, '答案不存在');
+      }
 
-      const winner = room.players.get(payload.playerId);
+      const winner = room.players.get(selectedAnswer.playerId);
       if (!winner) return actionResult(callback, false, '玩家已经离开');
       winner.score += 1;
       round.phase = 'reveal';

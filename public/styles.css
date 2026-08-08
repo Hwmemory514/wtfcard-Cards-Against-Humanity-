@@ -326,6 +326,9 @@ button.white-card:focus-visible { outline: 3px solid var(--blue); outline-offset
 .white-card.free-card { color: var(--text); background: #215f55; border-color: var(--mint); }
 .white-card.answer-card { display: flex; flex-direction: column; justify-content: space-between; gap: 16px; }
 .answer-owner { color: #676b73; font-size: 12px; font-weight: 700; }
+.revealed-answers-heading { margin: 24px 0 10px; font-size: 15px; }
+.revealed-answers .white-card { min-height: 110px; }
+.white-card.winner-answer { border-color: var(--yellow); box-shadow: inset 0 0 0 2px var(--yellow); }
 
 .empty-stage { text-align: center; max-width: 500px; }
 .empty-stage .stage-icon { color: var(--yellow); margin-bottom: 14px; }

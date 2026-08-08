@@ -63,7 +63,7 @@ after(async () => {
   }
 });
 
-test('two players can complete a validated round and resume a session', async () => {
+test('players can complete an anonymous judging round and resume a session', async () => {
   const host = await trackedClient();
   const created = await emitResult(host, 'create-room', { nick: '房主' });
   assert.equal(created.ok, true);
@@ -71,27 +71,50 @@ test('two players can complete a validated round and resume a session', async ()
   const guest = await trackedClient();
   const joined = await emitResult(guest, 'join-room', { roomId: created.roomId, nick: '玩家' });
   assert.equal(joined.ok, true);
-  await waitForState(host, state => state.players.length === 2);
-  await waitForState(guest, state => state.players.length === 2);
+
+  const secondGuest = await trackedClient();
+  const secondJoined = await emitResult(secondGuest, 'join-room', { roomId: created.roomId, nick: '玩家乙' });
+  assert.equal(secondJoined.ok, true);
+  await waitForState(host, state => state.players.length === 3);
+  await waitForState(guest, state => state.players.length === 3);
+  await waitForState(secondGuest, state => state.players.length === 3);
 
   const started = await emitResult(host, 'start-round');
   assert.equal(started.ok, true);
   const guestRound = await waitForState(guest, state => state.round?.phase === 'answering');
+  const secondGuestRound = await waitForState(secondGuest, state => state.round?.phase === 'answering');
   assert.equal(guestRound.round.hand.length, 5);
-  assert.equal(guestRound.round.expectedCount, 1);
+  assert.equal(guestRound.round.expectedCount, 2);
 
+  const guestAnswer = guestRound.round.hand[0].text;
   const submitted = await emitResult(guest, 'submit-answer', { cardId: guestRound.round.hand[0].id });
   assert.equal(submitted.ok, true);
+  const secondSubmitted = await emitResult(secondGuest, 'submit-answer', {
+    cardId: secondGuestRound.round.hand[0].id
+  });
+  assert.equal(secondSubmitted.ok, true);
   const judging = await waitForState(host, state => state.round?.phase === 'judging');
-  assert.equal(judging.round.answers.length, 1);
+  assert.equal(judging.round.answers.length, 2);
+  for (const answer of judging.round.answers) {
+    assert.equal(typeof answer.id, 'string');
+    assert.equal('playerId' in answer, false);
+    assert.equal('nick' in answer, false);
+  }
 
   const forgedSelection = await emitResult(guest, 'select-winner', { playerId: joined.playerId });
   assert.equal(forgedSelection.ok, false);
 
-  const selected = await emitResult(host, 'select-winner', { playerId: joined.playerId });
+  const selectedAnswer = judging.round.answers.find(answer => answer.text === guestAnswer);
+  assert.ok(selectedAnswer);
+  const selected = await emitResult(host, 'select-winner', { answerId: selectedAnswer.id });
   assert.equal(selected.ok, true);
   const reveal = await waitForState(guest, state => state.round?.phase === 'reveal');
   assert.equal(reveal.round.winner.playerId, joined.playerId);
+  assert.equal(reveal.round.answers.length, 2);
+  assert.ok(reveal.round.answers.every(answer => answer.playerId && answer.nick));
+  const revealedWinner = reveal.round.answers.find(answer => answer.isWinner);
+  assert.equal(revealedWinner.playerId, joined.playerId);
+  assert.equal(revealedWinner.nick, '玩家');
   assert.equal(reveal.players.find(player => player.id === joined.playerId).score, 1);
 
   guest.socket.disconnect();
