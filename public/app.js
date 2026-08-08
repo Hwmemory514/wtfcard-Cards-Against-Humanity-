@@ -147,6 +147,7 @@ function progressStatus(round, title, message) {
 
 function renderGameStage() {
   const stage = $('gameStage');
+  stopCountdown();
   stage.replaceChildren();
   if (!gameState) return;
 
@@ -217,7 +218,10 @@ function renderGameStage() {
       card.append(node('span', '', answer.text));
       grid.append(card);
     }
-    shell.append(grid);
+    const countdown = node('div', 'countdown');
+    countdown.id = 'roundCountdown';
+    shell.append(grid, countdown);
+    startCountdown(round.judgingEndsAt, '秒后未选择将随机决定胜者');
   } else if (round.phase === 'reveal' && round.winner) {
     const reveal = node('div', 'reveal-card');
     reveal.append(
@@ -232,9 +236,10 @@ function renderGameStage() {
       card.append(node('span', '', answer.text), node('span', 'answer-owner', answer.nick));
       answerGrid.append(card);
     }
-    shell.append(reveal, answerHeading, answerGrid, node('div', 'countdown', '',));
-    shell.lastChild.id = 'roundCountdown';
-    startCountdown(round.winner.revealEndsAt);
+    const countdown = node('div', 'countdown');
+    countdown.id = 'roundCountdown';
+    shell.append(reveal, answerHeading, answerGrid, countdown);
+    startCountdown(round.winner.revealEndsAt, '秒后自动进入下一轮');
     speakReveal(round);
   }
 
@@ -315,13 +320,14 @@ function stopCountdown() {
   countdownTimer = null;
 }
 
-function startCountdown(endsAt) {
+function startCountdown(endsAt, suffix) {
   stopCountdown();
+  if (!Number.isFinite(endsAt)) return;
   const tick = () => {
     const target = $('roundCountdown');
     if (!target) return stopCountdown();
     const seconds = Math.max(0, Math.ceil((endsAt - Date.now()) / 1_000));
-    target.textContent = `${seconds} 秒后自动进入下一轮`;
+    target.textContent = `${seconds} ${suffix}`;
     if (!seconds) stopCountdown();
   };
   tick();

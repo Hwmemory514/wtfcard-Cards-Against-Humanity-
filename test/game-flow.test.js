@@ -7,8 +7,8 @@ let gameServer;
 let baseUrl;
 const clients = [];
 
-function trackedClient() {
-  const socket = createClient(baseUrl, {
+function trackedClient(url = baseUrl) {
+  const socket = createClient(url, {
     transports: ['websocket'],
     forceNew: true,
     reconnection: false
@@ -52,6 +52,7 @@ before(async () => {
 after(async () => {
   for (const client of clients) client.socket.disconnect();
   for (const room of gameServer.rooms.values()) {
+    if (room.judgingTimer) clearTimeout(room.judgingTimer);
     if (room.revealTimer) clearTimeout(room.revealTimer);
     for (const player of room.players.values()) {
       if (player.disconnectTimer) clearTimeout(player.disconnectTimer);
@@ -95,6 +96,7 @@ test('players can complete an anonymous judging round and resume a session', asy
   assert.equal(secondSubmitted.ok, true);
   const judging = await waitForState(host, state => state.round?.phase === 'judging');
   assert.equal(judging.round.answers.length, 2);
+  assert.ok(judging.round.judgingEndsAt > Date.now());
   for (const answer of judging.round.answers) {
     assert.equal(typeof answer.id, 'string');
     assert.equal('playerId' in answer, false);
@@ -126,4 +128,54 @@ test('players can complete an anonymous judging round and resume a session', asy
   assert.equal(resumed.ok, true);
   const resumedState = await waitForState(resumedGuest, state => state.selfPlayerId === joined.playerId);
   assert.equal(resumedState.players.find(player => player.id === joined.playerId).connected, true);
+});
+
+test('randomly selects a winner when the judge times out', async () => {
+  const timedServer = createGameServer({ judgingMs: 80, revealMs: 5_000 });
+  await new Promise(resolve => timedServer.server.listen(0, '127.0.0.1', resolve));
+  const timedUrl = `http://127.0.0.1:${timedServer.server.address().port}`;
+  const timedClients = [];
+
+  try {
+    const host = await trackedClient(timedUrl);
+    const guest = await trackedClient(timedUrl);
+    const secondGuest = await trackedClient(timedUrl);
+    timedClients.push(host, guest, secondGuest);
+
+    const created = await emitResult(host, 'create-room', { nick: '裁判' });
+    const joined = await emitResult(guest, 'join-room', { roomId: created.roomId, nick: '玩家一' });
+    const secondJoined = await emitResult(secondGuest, 'join-room', {
+      roomId: created.roomId,
+      nick: '玩家二'
+    });
+    await waitForState(host, state => state.players.length === 3);
+
+    assert.equal((await emitResult(host, 'start-round')).ok, true);
+    const guestRound = await waitForState(guest, state => state.round?.phase === 'answering');
+    const secondGuestRound = await waitForState(secondGuest, state => state.round?.phase === 'answering');
+    await emitResult(guest, 'submit-answer', { cardId: guestRound.round.hand[0].id });
+    await emitResult(secondGuest, 'submit-answer', { cardId: secondGuestRound.round.hand[0].id });
+
+    const judging = await waitForState(host, state => state.round?.phase === 'judging');
+    assert.equal(judging.round.answers.length, 2);
+    assert.ok(Number.isFinite(judging.round.judgingEndsAt));
+
+    const reveal = await waitForState(host, state => state.round?.phase === 'reveal');
+    assert.ok([joined.playerId, secondJoined.playerId].includes(reveal.round.winner.playerId));
+    assert.equal(reveal.players.reduce((total, player) => total + player.score, 0), 1);
+    assert.ok(reveal.round.answers.every(answer => answer.playerId && answer.nick));
+  } finally {
+    for (const client of timedClients) client.socket.disconnect();
+    for (const room of timedServer.rooms.values()) {
+      if (room.judgingTimer) clearTimeout(room.judgingTimer);
+      if (room.revealTimer) clearTimeout(room.revealTimer);
+      for (const player of room.players.values()) {
+        if (player.disconnectTimer) clearTimeout(player.disconnectTimer);
+      }
+    }
+    await new Promise(resolve => timedServer.io.close(resolve));
+    if (timedServer.server.listening) {
+      await new Promise(resolve => timedServer.server.close(resolve));
+    }
+  }
 });
