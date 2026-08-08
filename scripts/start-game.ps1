@@ -6,6 +6,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $projectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $runtimeDir = Join-Path $projectRoot '.runtime'
+$toolsDir = Join-Path $runtimeDir 'tools'
 $serverPath = Join-Path $projectRoot 'server.js'
 $tunnelPath = Join-Path $projectRoot 'cloudflared.exe'
 $serverPidFile = Join-Path $runtimeDir 'server.pid'
@@ -63,17 +64,49 @@ function Write-LauncherLog {
   Add-Content -LiteralPath $launcherLog -Value "$timestamp $Message" -Encoding UTF8
 }
 
+function Get-CompatibleNode {
+  $candidates = @()
+  if (Test-Path -LiteralPath $toolsDir -PathType Container) {
+    $candidates += Get-ChildItem -LiteralPath $toolsDir -Filter 'node.exe' -File -Recurse -ErrorAction SilentlyContinue |
+      Sort-Object -Property FullName -Descending |
+      Select-Object -ExpandProperty FullName
+  }
+  try {
+    $systemNode = Get-Command node.exe -ErrorAction Stop
+    $candidates += $systemNode.Source
+  } catch { }
+
+  foreach ($candidate in $candidates | Select-Object -Unique) {
+    if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
+    try {
+      $versionText = (& $candidate --version 2>$null | Select-Object -First 1)
+      if ($versionText -match '^v(?<major>\d+)\.' -and [int]$Matches.major -ge 20) {
+        return $candidate
+      }
+    } catch { }
+  }
+  return $null
+}
+
 try {
+  New-Item -ItemType Directory -Path $runtimeDir -Force | Out-Null
+  Set-Content -LiteralPath $launcherLog -Value '' -Encoding UTF8
+  Write-LauncherLog 'Launcher started.'
+
   if (-not (Test-Path -LiteralPath $serverPath)) {
     throw "server.js was not found: $serverPath"
   }
   if (-not (Test-Path -LiteralPath $tunnelPath)) {
-    throw "cloudflared.exe was not found: $tunnelPath"
+    throw 'cloudflared.exe was not found. Run the first-time setup script in the project root.'
+  }
+  if (-not (Test-Path -LiteralPath (Join-Path $projectRoot 'node_modules\express\package.json'))) {
+    throw 'Game dependencies were not found. Run the first-time setup script in the project root.'
   }
 
-  New-Item -ItemType Directory -Path $runtimeDir -Force | Out-Null
-  Set-Content -LiteralPath $launcherLog -Value '' -Encoding UTF8
-  Write-LauncherLog 'Launcher started.'
+  $nodePath = Get-CompatibleNode
+  if (-not $nodePath) {
+    throw 'Node.js 20 or newer was not found. Run the first-time setup script in the project root.'
+  }
 
   $existingServer = Find-ProcessByCommand -ProcessName 'node.exe' -CommandFragment $serverPath
   if ($existingServer) {
@@ -86,8 +119,7 @@ try {
       throw "Port $Port is already in use by another program."
     }
 
-    $nodeCommand = Get-Command node -ErrorAction Stop
-    $serverCommandLine = '"' + $nodeCommand.Source + '" "' + $serverPath + '"'
+    $serverCommandLine = '"' + $nodePath + '" "' + $serverPath + '"'
     $createdServer = Invoke-CimMethod `
       -ClassName Win32_Process `
       -MethodName Create `

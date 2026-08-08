@@ -1,5 +1,14 @@
 # WTF Card Online 使用说明
 
+## 本次更新(2026/8/8-20:08)
+
+- 更新游戏词库：现有 72 张黑卡和 96 张白卡。
+- 新增首次启动脚本：自动准备 Node.js、cloudflared 和游戏依赖。
+
+
+
+
+
 这是一款浏览器多人卡牌游戏。
 
 你只需要在一台 Windows 电脑上启动游戏，把生成的临时网址发给朋友。朋友使用手机或电脑浏览器打开网址，就可以加入同一个房间。
@@ -8,7 +17,16 @@
 
 ## 最简单的使用方法
 
-### 开始游戏
+### 第一次从 GitHub 下载后
+
+1. 解压完整项目，不要只单独下载某一个文件。
+2. 双击 `第一次启动时请打开该脚本.cmd`。
+3. 等待窗口显示 `First-time setup completed successfully.`。
+4. 关闭这个窗口。以后通常不需要再次运行首次脚本。
+
+首次准备会联网下载运行环境和依赖，耗时取决于网速。脚本下载的内容不会上传到 GitHub，也不会安装到 Windows 系统目录，便携版 Node.js 会放在项目的 `.runtime` 文件夹中。
+
+### 平常开始游戏
 
 1. 双击 `启动游戏.cmd`。
 2. 等待窗口显示 `WTF Card is running.`。
@@ -65,86 +83,93 @@ https://随机单词.trycloudflare.com
 
 ### 简短答案
 
-可以移动整个文件夹，但目前不是“任意电脑上百分之百双击即用”。
+可以。把 GitHub 下载的完整项目移动到一台新的 64 位 Windows 电脑上，联网运行一次 `第一次启动时请打开该脚本.cmd`，准备成功后即可双击 `启动游戏.cmd`。
 
-### 可以直接使用的电脑
+它不会保证在任何电脑和任何网络中都成功：macOS、Linux、32 位 Windows，以及阻止 Node.js、GitHub、Cloudflare 或脚本运行的受限网络不在当前一键脚本支持范围内。
 
-目标电脑需要满足以下条件：
+### 目标电脑需要满足的条件
 
 1. 使用 64 位 Windows 10 或 Windows 11。
-2. 已安装 Node.js 20 或更高版本。
-3. Node.js 的安装程序已经把 `node` 加入系统 `PATH`。
-4. 复制的是完整项目文件夹，包括 `node_modules` 和 `cloudflared.exe`。
-5. 电脑可以正常访问互联网和 Cloudflare。
-6. 本机的 `3000` 端口没有被其他程序占用。
+2. 第一次准备时可以访问 `nodejs.org`、GitHub 和 npm 软件源。
+3. PowerShell 可以运行，杀毒软件没有阻止下载的官方程序。
+4. 游戏期间可以正常访问 Cloudflare，电脑保持开机、联网且不休眠。
+5. 本机的 `3000` 端口没有被其他程序占用。
 
-满足这些条件后，文件夹可以放在桌面、移动硬盘或其他磁盘中，路径可以改变，也可以包含中文和空格。
+不要求提前安装 Node.js。首次脚本会优先使用电脑上已有的 Node.js 20+；如果没有，就下载项目自带使用的便携版。文件夹可以放在桌面、移动硬盘或其他磁盘中，路径可以改变，也可以包含中文和空格。
 
-### 不能直接使用的情况
+### 为什么不把缺少的文件直接上传到 GitHub
 
-- macOS 或 Linux：当前附带的是 Windows 版 `cloudflared.exe`，两个 `.cmd` 脚本也只能在 Windows 运行。
-- 没有安装 Node.js：启动窗口会提示找不到 `node`。
-- 只从 Git 仓库下载源码：`node_modules` 和 `cloudflared.exe` 默认不会提交到 Git，需要重新安装或补齐。
-- 公司、学校或特殊网络阻止 Cloudflare Tunnel：本机游戏可能正常，但无法生成或访问临时公网网址。
-- 杀毒软件拦截 `cloudflared.exe`：需要确认文件来源后允许它运行。
-
-### 如何检查 Node.js
-
-按 `Win + R`，输入 `cmd` 并回车，然后运行：
-
-```cmd
-node --version
-```
-
-如果显示类似下面的内容，说明 Node.js 已经安装：
+`.gitignore` 中仍然保留以下规则：
 
 ```text
-v24.18.0
+node_modules/
+.runtime/
+/cloudflared.exe
+/public-url.txt
 ```
 
-版本号的第一个数字应当不小于 `20`。
+这些文件不适合提交到 Git：
 
-如果提示“不是内部或外部命令”，需要先安装 Node.js。
+- `node_modules` 是可以通过 `package-lock.json` 精确重建的第三方依赖，文件数量很多。
+- `.runtime` 保存便携版 Node.js、下载缓存、日志和进程编号，只属于当前电脑。
+- `cloudflared.exe` 是大约 54 MB 的 Windows 可执行文件，首次脚本会从 Cloudflare 官方发布页获取。
+- `public-url.txt` 每次启动都会重新生成，里面只是本次临时网址。
 
-### 如果没有复制 node_modules
+因此，GitHub 保存的是“源码 + 安装清单 + 自动准备脚本”，而不是某台电脑已经安装好的副本。Render 也会根据 `package-lock.json` 自动安装依赖。
 
-在项目文件夹空白处按住 `Shift` 并单击鼠标右键，打开 PowerShell，然后运行：
+### 首次脚本具体下载什么
 
-```powershell
-npm install
-```
+`第一次启动时请打开该脚本.cmd` 会调用 `scripts/first-run-setup.ps1`，依次完成：
 
-安装完成后再双击 `启动游戏.cmd`。
+1. 确认当前系统是 64 位 Windows，并检查 `package.json` 与 `package-lock.json`。
+2. 查找 Node.js 20+。如果电脑没有兼容版本，就从 Node.js 官网下载固定版本 `24.18.0` 的便携压缩包。
+3. 对 Node.js 下载文件执行 SHA-256 校验，正确后解压到 `.runtime/tools/`。
+4. 检查项目根目录中的 `cloudflared.exe`。如果没有，就从 Cloudflare 官方 GitHub Release 下载固定版本 `2026.7.3`。
+5. 对 `cloudflared.exe` 执行 SHA-256 校验，拒绝运行下载不完整或内容不符的文件。
+6. 执行 `npm ci --omit=dev`，严格按照 `package-lock.json` 创建 `node_modules`。
+7. 检查游戏真正需要的几个依赖是否已经安装成功。
+
+首次脚本可以重复运行。重复运行会重新按照锁文件整理依赖；已经校验通过的 Node.js 和 `cloudflared.exe` 不会重复下载。
+
+脚本目前固定了下载版本和校验值。以后如果维护者升级 Node.js 或 cloudflared，需要同时更新 `scripts/first-run-setup.ps1` 中的版本、下载地址和 SHA-256。
 
 ## 哪些文件必须一起复制
 
-以下文件和文件夹是运行游戏所必需的：
+从 GitHub 下载或复制给朋友时，至少应包含：
 
 ```text
 public/
 scripts/
-node_modules/
-cloudflared.exe
 game-data.js
 server.js
 package.json
 package-lock.json
+第一次启动时请打开该脚本.cmd
 启动游戏.cmd
 关闭游戏.cmd
 ```
 
-以下内容不是运行所必需的：
+首次脚本运行后会自动补齐：
 
 ```text
-.git/
-artifacts/
-test/
-Dockerfile
-render.yaml
-wtfcard.html
+node_modules/
+.runtime/tools/...
+cloudflared.exe
 ```
 
-`.runtime` 和 `public-url.txt` 是运行时自动生成的，不需要提前复制。
+`.runtime` 的其余日志、进程编号和 `public-url.txt` 也是运行时自动生成的。它们都不需要上传 GitHub。
+
+## 第一次启动时请打开该脚本.cmd 做了什么
+
+这个 `.cmd` 文件和 `启动游戏.cmd` 一样，只是一个方便双击的入口。它把控制台编码切换为 UTF-8，然后调用：
+
+```bat
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\first-run-setup.ps1"
+```
+
+其中 `%~dp0` 代表这个 `.cmd` 文件所在的项目目录，因此项目换磁盘、改文件夹名或路径包含中文时，脚本仍能找到对应的 PowerShell 文件。`-ExecutionPolicy Bypass` 只影响这一次运行，不会永久修改 Windows 的脚本策略。
+
+窗口最后的 `pause` 会等待按键，目的是让你看清成功或失败信息。真正的下载、校验和依赖安装逻辑都在 `scripts/first-run-setup.ps1` 中。
 
 ## 启动游戏.cmd 具体做了什么
 
@@ -206,11 +231,11 @@ exit /b %GAME_EXIT_CODE%
 执行顺序如下：
 
 1. 根据脚本所在位置计算项目根目录。
-2. 检查 `server.js` 和 `cloudflared.exe` 是否存在。
+2. 检查 `server.js`、`cloudflared.exe` 和游戏依赖是否存在；缺少时提示先运行首次脚本。
 3. 创建 `.runtime` 文件夹，用来保存进程编号和运行日志。
-4. 检查本项目的 Node 游戏服务是否已经运行。
-5. 检查 `3000` 端口是否被其他程序占用。
-6. 使用 Node.js 启动 `server.js`。
+4. 优先查找首次脚本下载的便携版 Node.js，否则使用系统中的 Node.js 20+。
+5. 检查本项目的 Node 游戏服务是否已经运行。
+6. 检查 `3000` 端口是否被其他程序占用，并使用 Node.js 启动 `server.js`。
 7. 请求 `http://127.0.0.1:3000/health`，确认游戏服务真的启动成功。
 8. 启动项目目录中的 `cloudflared.exe`。
 9. 等待 Cloudflare 返回随机的临时公网网址。
@@ -300,6 +325,8 @@ public-url.txt
 ```
 
 它们已经写入 `.gitignore`。Render 会根据 `package-lock.json` 自己安装依赖，也不需要本机隧道程序。
+
+这不会影响其他人从 GitHub 下载后在 Windows 本地运行：他们只需先双击仓库中的 `第一次启动时请打开该脚本.cmd`。这个首次脚本只用于本地电脑，Render 部署时不需要运行它。
 
 可以使用 GitHub Desktop 发布当前文件夹，也可以在项目目录运行：
 
@@ -466,11 +493,17 @@ docker run -d \
 
 ## 常见错误
 
-### 找不到 node
+### 提示先运行首次脚本
 
-原因：没有安装 Node.js，或者 Node.js 没有加入 `PATH`。
+原因：缺少 Node.js 20+、`node_modules` 或 `cloudflared.exe`。
 
-处理：安装 Node.js 20+，然后重新打开 `启动游戏.cmd`。
+处理：确认电脑联网，双击 `第一次启动时请打开该脚本.cmd`，看到成功提示后再打开 `启动游戏.cmd`。
+
+### 首次准备下载失败
+
+原因可能包括：无法访问 Node.js 官网、GitHub 或 npm；代理或校园网拦截；磁盘空间不足；杀毒软件阻止 `cloudflared.exe`。
+
+处理：保留窗口中的具体错误，检查网络和磁盘空间后重新运行首次脚本。下载文件必须通过 SHA-256 校验，校验失败时脚本不会继续安装。
 
 ### Port 3000 is already in use
 
