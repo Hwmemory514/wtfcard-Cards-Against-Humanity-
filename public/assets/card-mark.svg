@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72 72" role="img" aria-label="WTF Card">
+  <rect width="72" height="72" rx="14" fill="#17181b"/>
+  <rect x="17" y="10" width="38" height="52" rx="6" fill="#f4f1ea" transform="rotate(6 36 36)"/>
+  <path d="M36 22c-5 0-9 4-9 9 0 6 9 14 9 14s9-8 9-14c0-5-4-9-9-9Z" fill="#e23d55"/>
+  <circle cx="36" cy="33" r="3" fill="#f4f1ea"/>
+  <path d="M31 51h10" stroke="#17181b" stroke-width="3" stroke-linecap="round"/>
+</svg>
