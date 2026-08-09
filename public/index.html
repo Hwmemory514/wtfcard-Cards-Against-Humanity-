@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#111214">
   <title>WTF Card Online</title>
   <link rel="icon" href="/assets/card-mark.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/styles.css?v=20260809-2">
+    <link rel="stylesheet" href="/styles.css?v=20260809-4">
 </head>
 <body>
   <div id="toastRegion" class="toast-region" aria-live="polite"></div>
@@ -122,10 +122,14 @@
           </div>
           <div id="chatMessages" class="chat-messages" aria-live="polite"></div>
           <form id="chatForm" class="chat-form">
-            <input id="chatInput" maxlength="120" autocomplete="off" placeholder="说点什么">
+            <input id="chatInput" autocomplete="off" placeholder="说点什么">
+            <button id="emojiBtn" class="icon-btn" type="button" title="选择表情" aria-label="选择表情" aria-controls="emojiPicker" aria-expanded="false">
+              <i data-lucide="smile" aria-hidden="true"></i>
+            </button>
             <button class="icon-btn accent" type="submit" title="发送" aria-label="发送消息">
               <i data-lucide="send" aria-hidden="true"></i>
             </button>
+            <div id="emojiPicker" class="emoji-picker hidden" role="dialog" aria-label="常用表情"></div>
           </form>
         </section>
       </aside>
@@ -170,6 +174,6 @@
 
   <script src="/socket.io/socket.io.js"></script>
   <script src="/vendor/lucide.min.js"></script>
-  <script src="/app.js?v=20260809-3"></script>
+  <script src="/app.js?v=20260809-4"></script>
 </body>
 </html>

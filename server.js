@@ -10,6 +10,13 @@ const DISCONNECT_GRACE_MS = 30_000;
 const ANSWERING_MS = 30_000;
 const JUDGING_MS = 25_000;
 const REVEAL_MS = 10_000;
+const graphemeSegmenter = new Intl.Segmenter('zh', { granularity: 'grapheme' });
+
+function graphemeLength(value) {
+  let length = 0;
+  for (const _segment of graphemeSegmenter.segment(value)) length += 1;
+  return length;
+}
 
 function shuffle(values) {
   const result = [...values];
@@ -553,7 +560,7 @@ function createGameServer(options = {}) {
       const context = getSocketPlayer(socket);
       if (!context) return actionResult(callback, false, '尚未加入房间');
       const text = String(payload.text || '').trim();
-      if (!text || text.length > 120) return actionResult(callback, false, '消息需要 1-120 个字符');
+      if (!text || graphemeLength(text) > 120) return actionResult(callback, false, '消息需要 1-120 个字符');
       io.to(context.room.id).emit('chat-message', {
         sender: context.player.nick,
         text,

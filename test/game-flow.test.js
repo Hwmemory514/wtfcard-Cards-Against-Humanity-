@@ -88,6 +88,14 @@ test('four players can complete an anonymous judging round and resume a session'
   await waitForState(secondGuest, state => state.players.length === 4);
   await waitForState(thirdGuest, state => state.players.length === 4);
 
+  const emojiMessage = '😂'.repeat(120);
+  const receivedEmojiMessage = new Promise(resolve => guest.socket.once('chat-message', resolve));
+  const emojiSent = await emitResult(host, 'chat-message', { text: emojiMessage });
+  assert.equal(emojiSent.ok, true);
+  assert.equal((await receivedEmojiMessage).text, emojiMessage);
+  const oversizedEmojiMessage = await emitResult(host, 'chat-message', { text: `${emojiMessage}😂` });
+  assert.equal(oversizedEmojiMessage.ok, false);
+
   const started = await emitResult(host, 'start-round');
   assert.equal(started.ok, true);
   const guestRound = await waitForState(guest, state => state.round?.phase === 'answering');

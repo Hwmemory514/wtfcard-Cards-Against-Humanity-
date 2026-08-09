@@ -1,5 +1,23 @@
 const SESSION_KEY = 'wtf-card-online-session';
 const SOUND_KEY = 'wtf-card-sound';
+const CHAT_MAX_LENGTH = 120;
+const CHAT_EMOJIS = [
+  ['😂', '笑哭'], ['🤦', '捂脸'], ['😁', '呲牙'], ['🤭', '捂嘴笑'],
+  ['👍', '点赞'], ['🌹', '玫瑰'], ['😭', '大哭'], ['❤️', '红心'],
+  ['🤣', '笑翻'], ['😍', '花痴'], ['😊', '微笑'], ['🙏', '谢谢'],
+  ['🥰', '喜爱'], ['😅', '流汗笑'], ['👏', '鼓掌'], ['💕', '两颗心'],
+  ['😘', '飞吻'], ['🔥', '火'], ['🥺', '可怜'], ['💔', '心碎'],
+  ['🤔', '思考'], ['😆', '开心笑'], ['🙄', '白眼'], ['💪', '加油'],
+  ['😉', '眨眼'], ['🤗', '抱抱'], ['😎', '酷'], ['🎉', '庆祝'],
+  ['✨', '闪亮'], ['😱', '震惊'], ['😋', '好吃'], ['😏', '斜眼笑'],
+  ['🤩', '星星眼'], ['😄', '开心'], ['💯', '满分'], ['🙈', '不看'],
+  ['👀', '围观'], ['😡', '生气'], ['🤬', '骂人'], ['😳', '脸红'],
+  ['😴', '睡觉'], ['💀', '寄'], ['🤡', '小丑'], ['👌', '好的'],
+  ['✌️', '胜利'], ['🤓', '书呆子'], ['🍉', '吃瓜'], ['🐶', '狗头']
+];
+const chatSegmenter = typeof Intl.Segmenter === 'function'
+  ? new Intl.Segmenter('zh', { granularity: 'grapheme' })
+  : null;
 
 const socket = io({
   reconnection: true,
@@ -112,6 +130,44 @@ function node(tag, className, text) {
   if (className) element.className = className;
   if (text !== undefined) element.textContent = text;
   return element;
+}
+
+function splitGraphemes(value) {
+  return chatSegmenter
+    ? [...chatSegmenter.segment(value)].map(segment => segment.segment)
+    : Array.from(value);
+}
+
+function closeEmojiPicker() {
+  $('emojiPicker').classList.add('hidden');
+  $('emojiBtn').setAttribute('aria-expanded', 'false');
+}
+
+function insertEmoji(emoji) {
+  const input = $('chatInput');
+  const start = input.selectionStart ?? input.value.length;
+  const end = input.selectionEnd ?? input.value.length;
+  const nextValue = `${input.value.slice(0, start)}${emoji}${input.value.slice(end)}`;
+  if (splitGraphemes(nextValue).length > CHAT_MAX_LENGTH) {
+    showToast(`消息最多 ${CHAT_MAX_LENGTH} 个字符`, 'warning');
+    return;
+  }
+  input.value = nextValue;
+  const cursor = start + emoji.length;
+  input.focus();
+  input.setSelectionRange(cursor, cursor);
+}
+
+function renderEmojiPicker() {
+  const picker = $('emojiPicker');
+  for (const [emoji, label] of CHAT_EMOJIS) {
+    const button = node('button', 'emoji-option', emoji);
+    button.type = 'button';
+    button.title = label;
+    button.setAttribute('aria-label', label);
+    button.addEventListener('click', () => insertEmoji(emoji));
+    picker.append(button);
+  }
 }
 
 function actionButton(label, icon, handler, secondary = false) {
@@ -629,9 +685,33 @@ $('chatForm').addEventListener('submit', async event => {
   const input = $('chatInput');
   const text = input.value.trim();
   if (!text) return;
+  closeEmojiPicker();
   input.value = '';
   const result = await runAction('chat-message', { text });
   if (!result) input.value = text;
+});
+
+$('emojiBtn').addEventListener('click', () => {
+  const picker = $('emojiPicker');
+  const opening = picker.classList.contains('hidden');
+  picker.classList.toggle('hidden', !opening);
+  $('emojiBtn').setAttribute('aria-expanded', String(opening));
+});
+
+$('chatInput').addEventListener('input', event => {
+  const graphemes = splitGraphemes(event.target.value);
+  if (graphemes.length <= CHAT_MAX_LENGTH) return;
+  event.target.value = graphemes.slice(0, CHAT_MAX_LENGTH).join('');
+  event.target.setSelectionRange(event.target.value.length, event.target.value.length);
+});
+
+document.addEventListener('click', event => {
+  if (event.target.closest?.('#emojiBtn, #emojiPicker')) return;
+  closeEmojiPicker();
+});
+
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape') closeEmojiPicker();
 });
 
 $('announcementBtn').addEventListener('click', () => {
@@ -703,3 +783,4 @@ if (roomFromUrl && !session) {
 
 setConnectionStatus(socket.connected);
 updateSoundButton();
+renderEmojiPicker();
