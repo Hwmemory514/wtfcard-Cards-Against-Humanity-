@@ -7,6 +7,7 @@ const { blackCards, whiteCards } = require('./game-data');
 
 const MAX_PLAYERS = 10;
 const DISCONNECT_GRACE_MS = 30_000;
+const ANSWERING_MS = 30_000;
 const JUDGING_MS = 25_000;
 const REVEAL_MS = 10_000;
 
@@ -38,6 +39,7 @@ function randomRoomId(rooms) {
 }
 
 function createGameServer(options = {}) {
+  const answeringMs = Number.isFinite(options.answeringMs) ? Math.max(1, options.answeringMs) : ANSWERING_MS;
   const judgingMs = Number.isFinite(options.judgingMs) ? Math.max(1, options.judgingMs) : JUDGING_MS;
   const revealMs = Number.isFinite(options.revealMs) ? Math.max(1, options.revealMs) : REVEAL_MS;
   const app = express();
@@ -64,6 +66,7 @@ function createGameServer(options = {}) {
       round: null,
       whiteDeck: shuffle(whiteCards),
       usedBlackCards: new Set(),
+      answeringTimer: null,
       judgingTimer: null,
       revealTimer: null
     };
@@ -108,6 +111,7 @@ function createGameServer(options = {}) {
       id: round.id,
       phase: round.phase,
       question: round.question,
+      answeringEndsAt: round.answeringEndsAt,
       judgingEndsAt: round.judgingEndsAt,
       submittedCount: round.answers.size,
       expectedCount: round.participantIds.length - 1,
@@ -181,6 +185,11 @@ function createGameServer(options = {}) {
     room.judgingTimer = null;
   }
 
+  function clearAnsweringTimer(room) {
+    if (room.answeringTimer) clearTimeout(room.answeringTimer);
+    room.answeringTimer = null;
+  }
+
   function drawWhiteCards(room, count) {
     if (room.whiteDeck.length < count) room.whiteDeck = shuffle(whiteCards);
     return room.whiteDeck.splice(0, count);
@@ -216,6 +225,7 @@ function createGameServer(options = {}) {
       if (crypto.randomInt(100) < 5) freeCardPlayerIds.add(player.id);
     }
 
+    const answeringEndsAt = Date.now() + answeringMs;
     room.round = {
       id: crypto.randomUUID(),
       phase: 'answering',
@@ -227,11 +237,36 @@ function createGameServer(options = {}) {
       answers: new Map(),
       answerOptions: [],
       winnerPlayerId: null,
+      answeringEndsAt,
       judgingEndsAt: null,
       revealEndsAt: null
     };
+    clearAnsweringTimer(room);
+    room.answeringTimer = setTimeout(() => submitDefaultAnswers(room), answeringMs);
+    room.answeringTimer.unref?.();
     broadcastState(room);
     return true;
+  }
+
+  function submitDefaultAnswers(room) {
+    const round = room.round;
+    if (!round || round.phase !== 'answering') return;
+    clearAnsweringTimer(room);
+
+    let autoSubmittedCount = 0;
+    for (const playerId of round.participantIds) {
+      if (playerId === round.judgePlayerId || round.answers.has(playerId)) continue;
+      const firstCard = round.hands.get(playerId)?.[0];
+      if (!firstCard) continue;
+      round.answers.set(playerId, firstCard.text);
+      autoSubmittedCount += 1;
+    }
+
+    if (autoSubmittedCount) {
+      emitNotice(room, `选牌时间结束，已为 ${autoSubmittedCount} 名未提交玩家自动打出第一张牌`);
+    }
+    finishAnsweringIfReady(room);
+    if (room.round?.phase === 'answering') broadcastState(room);
   }
 
   function finishAnsweringIfReady(room) {
@@ -239,7 +274,9 @@ function createGameServer(options = {}) {
     if (!round || round.phase !== 'answering') return;
     const expectedIds = round.participantIds.filter(id => id !== round.judgePlayerId);
     if (!expectedIds.every(id => round.answers.has(id))) return;
+    clearAnsweringTimer(room);
     round.phase = 'judging';
+    round.answeringEndsAt = null;
     round.answerOptions = shuffle(expectedIds).map(playerId => ({
       id: crypto.randomUUID(),
       playerId
@@ -294,6 +331,7 @@ function createGameServer(options = {}) {
     const previousJudge = room.judgePlayerId;
     room.round = null;
     room.judgePlayerId = nextConnectedPlayerId(room, previousJudge);
+    clearAnsweringTimer(room);
     clearJudgingTimer(room);
     clearRevealTimer(room);
     if (connectedPlayers(room).length >= 2 && room.judgePlayerId) startRound(room);
@@ -309,6 +347,7 @@ function createGameServer(options = {}) {
 
     room.players.delete(playerId);
     if (!room.players.size) {
+      clearAnsweringTimer(room);
       clearJudgingTimer(room);
       clearRevealTimer(room);
       rooms.delete(room.id);
@@ -322,6 +361,7 @@ function createGameServer(options = {}) {
       room.round.answers.delete(playerId);
       room.round.answerOptions = room.round.answerOptions.filter(option => option.playerId !== playerId);
       if (wasJudge) {
+        clearAnsweringTimer(room);
         clearJudgingTimer(room);
         clearRevealTimer(room);
         room.round = null;
@@ -526,6 +566,7 @@ function createGameServer(options = {}) {
       if (!context) return actionResult(callback, false, '尚未加入房间');
       const { room, player } = context;
       if (player.id !== room.hostPlayerId) return actionResult(callback, false, '只有房主可以重启游戏');
+      clearAnsweringTimer(room);
       clearJudgingTimer(room);
       clearRevealTimer(room);
       room.round = null;

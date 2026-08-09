@@ -202,6 +202,10 @@ function renderGameStage() {
       }
       shell.append(grid);
     }
+    const countdown = node('div', 'countdown');
+    countdown.id = 'roundCountdown';
+    shell.append(countdown);
+    startCountdown(round.answeringEndsAt, '秒后未选玩家将自动打出第一张牌');
   } else if (round.phase === 'judging') {
     shell.append(progressStatus(round, isJudge ? '选出本轮赢家' : '等待裁判选择', `${round.answers.length} 个答案`));
     const grid = node('div', 'answers-grid');

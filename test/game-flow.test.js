@@ -52,6 +52,7 @@ before(async () => {
 after(async () => {
   for (const client of clients) client.socket.disconnect();
   for (const room of gameServer.rooms.values()) {
+    if (room.answeringTimer) clearTimeout(room.answeringTimer);
     if (room.judgingTimer) clearTimeout(room.judgingTimer);
     if (room.revealTimer) clearTimeout(room.revealTimer);
     for (const player of room.players.values()) {
@@ -86,6 +87,7 @@ test('players can complete an anonymous judging round and resume a session', asy
   const secondGuestRound = await waitForState(secondGuest, state => state.round?.phase === 'answering');
   assert.equal(guestRound.round.hand.length, 5);
   assert.equal(guestRound.round.expectedCount, 2);
+  assert.ok(guestRound.round.answeringEndsAt > Date.now());
 
   const guestAnswer = guestRound.round.hand[0].text;
   const submitted = await emitResult(guest, 'submit-answer', { cardId: guestRound.round.hand[0].id });
@@ -130,8 +132,8 @@ test('players can complete an anonymous judging round and resume a session', asy
   assert.equal(resumedState.players.find(player => player.id === joined.playerId).connected, true);
 });
 
-test('randomly selects a winner when the judge times out', async () => {
-  const timedServer = createGameServer({ judgingMs: 80, revealMs: 5_000 });
+test('uses the first card for unanswered players and randomly selects when the judge times out', async () => {
+  const timedServer = createGameServer({ answeringMs: 200, judgingMs: 80, revealMs: 5_000 });
   await new Promise(resolve => timedServer.server.listen(0, '127.0.0.1', resolve));
   const timedUrl = `http://127.0.0.1:${timedServer.server.address().port}`;
   const timedClients = [];
@@ -153,11 +155,17 @@ test('randomly selects a winner when the judge times out', async () => {
     assert.equal((await emitResult(host, 'start-round')).ok, true);
     const guestRound = await waitForState(guest, state => state.round?.phase === 'answering');
     const secondGuestRound = await waitForState(secondGuest, state => state.round?.phase === 'answering');
-    await emitResult(guest, 'submit-answer', { cardId: guestRound.round.hand[0].id });
-    await emitResult(secondGuest, 'submit-answer', { cardId: secondGuestRound.round.hand[0].id });
+    const manuallySelectedCard = guestRound.round.hand[1];
+    const automaticallySelectedCard = secondGuestRound.round.hand[0];
+    assert.ok(Number.isFinite(guestRound.round.answeringEndsAt));
+    await emitResult(guest, 'submit-answer', { cardId: manuallySelectedCard.id });
 
     const judging = await waitForState(host, state => state.round?.phase === 'judging');
     assert.equal(judging.round.answers.length, 2);
+    assert.deepEqual(
+      new Set(judging.round.answers.map(answer => answer.text)),
+      new Set([manuallySelectedCard.text, automaticallySelectedCard.text])
+    );
     assert.ok(Number.isFinite(judging.round.judgingEndsAt));
 
     const reveal = await waitForState(host, state => state.round?.phase === 'reveal');
@@ -167,6 +175,7 @@ test('randomly selects a winner when the judge times out', async () => {
   } finally {
     for (const client of timedClients) client.socket.disconnect();
     for (const room of timedServer.rooms.values()) {
+      if (room.answeringTimer) clearTimeout(room.answeringTimer);
       if (room.judgingTimer) clearTimeout(room.judgingTimer);
       if (room.revealTimer) clearTimeout(room.revealTimer);
       for (const player of room.players.values()) {
