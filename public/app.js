@@ -431,15 +431,16 @@ function unlockSpeech() {
 
   speechUnlocking = true;
   window.speechSynthesis.resume();
-  const confirmation = new SpeechSynthesisUtterance('语音播报已开启');
-  activeUtterance = confirmation;
-  confirmation.lang = 'zh-CN';
+  const unlockUtterance = new SpeechSynthesisUtterance('.');
+  activeUtterance = unlockUtterance;
+  unlockUtterance.lang = 'zh-CN';
+  unlockUtterance.volume = 0;
   const voice = chineseVoice();
-  if (voice) confirmation.voice = voice;
+  if (voice) unlockUtterance.voice = voice;
 
   let unlockTimer;
   const finishUnlock = success => {
-    if (activeUtterance !== confirmation) return;
+    if (activeUtterance !== unlockUtterance) return;
     clearTimeout(unlockTimer);
     speechUnlocking = false;
     activeUtterance = null;
@@ -447,24 +448,24 @@ function unlockSpeech() {
     updateSoundButton();
     if (success && pendingSpeechRound) speakReveal(pendingSpeechRound);
   };
-  confirmation.onstart = () => {
+  unlockUtterance.onstart = () => {
     speechUnlocked = true;
     updateSoundButton();
   };
-  confirmation.onend = () => finishUnlock(true);
-  confirmation.onerror = event => {
+  unlockUtterance.onend = () => finishUnlock(true);
+  unlockUtterance.onerror = event => {
     finishUnlock(false);
     showToast(`语音启用失败：${event.error || '浏览器拒绝播放'}`, 'warning');
   };
   unlockTimer = setTimeout(() => {
-    if (activeUtterance !== confirmation) return;
+    if (activeUtterance !== unlockUtterance) return;
     if (speechUnlocked) finishUnlock(true);
     else {
       finishUnlock(false);
       showToast('语音引擎没有响应，请使用系统 Safari、Chrome 或 Edge 打开', 'warning');
     }
   }, 3_000);
-  window.speechSynthesis.speak(confirmation);
+  window.speechSynthesis.speak(unlockUtterance);
 }
 
 function handleSpeechGesture(event) {
