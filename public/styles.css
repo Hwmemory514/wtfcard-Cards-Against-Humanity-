@@ -349,7 +349,32 @@ button.white-card:focus-visible { outline: 3px solid var(--blue); outline-offset
 .reveal-card .winner-label { color: #8e6410; font-size: 13px; font-weight: 900; }
 .reveal-card h2 { margin: 12px 0; font-size: 26px; line-height: 1.45; }
 .reveal-card p { margin: 0; color: #5a5c61; font-weight: 700; }
-.countdown { margin-top: 18px; color: var(--muted); text-align: center; font-size: 13px; }
+.countdown {
+  width: min(520px, 100%);
+  margin: 18px auto 0;
+  color: var(--muted);
+  text-align: center;
+  font-size: 13px;
+}
+.countdown-label { min-height: 20px; font-weight: 700; }
+.countdown-track {
+  width: 100%;
+  height: 8px;
+  margin-top: 8px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: var(--surface-2);
+}
+.countdown-fill {
+  width: 100%;
+  height: 100%;
+  background: var(--mint);
+  transition: width .1s linear, background-color .2s ease;
+}
+.countdown.warning { color: var(--yellow); }
+.countdown.warning .countdown-fill { background: var(--yellow); }
+.countdown.urgent { color: var(--red); }
+.countdown.urgent .countdown-fill { background: var(--red); }
 
 .side-column {
   min-width: 0;

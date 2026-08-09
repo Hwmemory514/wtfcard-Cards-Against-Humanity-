@@ -26,6 +26,8 @@ let speechWarningShown = false;
 let soundEnabled = localStorage.getItem(SOUND_KEY) !== 'off';
 let countdownTimer = null;
 let serverClockOffsetMs = 0;
+let clockSynchronized = false;
+let clockSyncTimer = null;
 
 function readSession() {
   try {
@@ -239,18 +241,29 @@ function renderGameStage() {
   }
 
   const countdownByPhase = {
-    answering: [round.answeringEndsAt, '秒后未选玩家将自动打出第一张牌'],
-    judging: [round.judgingEndsAt, '秒后未选择将随机决定胜者'],
-    reveal: [round.winner?.revealEndsAt, '秒后自动进入下一轮']
+    answering: [round.answeringEndsAt, '秒后未选玩家将自动打出第一张牌', round.answeringDurationMs],
+    judging: [round.judgingEndsAt, '秒后未选择将随机决定胜者', round.judgingDurationMs],
+    reveal: [round.winner?.revealEndsAt, '秒后自动进入下一轮', round.winner?.revealDurationMs]
   };
-  const [countdownEndsAt, countdownSuffix] = countdownByPhase[round.phase] || [];
+  const [countdownEndsAt, countdownSuffix, countdownDurationMs] = countdownByPhase[round.phase] || [];
   if (Number.isFinite(countdownEndsAt)) {
     const countdown = node('div', 'countdown');
     countdown.id = 'roundCountdown';
+    const label = node('div', 'countdown-label');
+    label.id = 'roundCountdownLabel';
+    const track = node('div', 'countdown-track');
+    track.setAttribute('role', 'progressbar');
+    track.setAttribute('aria-label', '本阶段剩余时间');
+    track.setAttribute('aria-valuemin', '0');
+    track.setAttribute('aria-valuemax', '100');
+    const fill = node('div', 'countdown-fill');
+    fill.id = 'roundCountdownFill';
+    track.append(fill);
+    countdown.append(label, track);
     shell.append(countdown);
   }
   stage.append(shell);
-  startCountdown(countdownEndsAt, countdownSuffix);
+  startCountdown(countdownEndsAt, countdownSuffix, countdownDurationMs);
   refreshIcons();
 }
 
@@ -327,19 +340,71 @@ function stopCountdown() {
   countdownTimer = null;
 }
 
-function startCountdown(endsAt, suffix) {
+function startCountdown(endsAt, suffix, durationMs) {
   stopCountdown();
-  if (!Number.isFinite(endsAt)) return;
+  if (!Number.isFinite(endsAt) || !Number.isFinite(durationMs)) return;
   const tick = () => {
     const target = $('roundCountdown');
-    if (!target) return stopCountdown();
+    const label = $('roundCountdownLabel');
+    const fill = $('roundCountdownFill');
+    const track = fill?.parentElement;
+    if (!target || !label || !fill || !track) return stopCountdown();
     const serverNow = Date.now() + serverClockOffsetMs;
-    const seconds = Math.max(0, Math.ceil((endsAt - serverNow) / 1_000));
-    target.textContent = `${seconds} ${suffix}`;
+    const remainingMs = Math.max(0, endsAt - serverNow);
+    const maxSeconds = Math.ceil(durationMs / 1_000);
+    const seconds = Math.min(maxSeconds, Math.ceil(remainingMs / 1_000));
+    const percent = Math.max(0, Math.min(100, (remainingMs / durationMs) * 100));
+    label.textContent = `${seconds} ${suffix}`;
+    fill.style.width = `${percent}%`;
+    track.setAttribute('aria-valuenow', String(Math.round(percent)));
+    target.classList.toggle('warning', seconds <= 10 && seconds > 5);
+    target.classList.toggle('urgent', seconds <= 5);
     if (!seconds) stopCountdown();
   };
   tick();
   countdownTimer = setInterval(tick, 250);
+}
+
+function requestServerTime() {
+  return new Promise(resolve => {
+    const sentAt = Date.now();
+    let settled = false;
+    const finish = sample => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      resolve(sample);
+    };
+    const timeout = setTimeout(() => finish(null), 10_000);
+    socket.emit('sync-time', {}, response => {
+      const receivedAt = Date.now();
+      if (!Number.isFinite(response?.serverNow)) return finish(null);
+      finish({
+        rtt: receivedAt - sentAt,
+        offset: response.serverNow - ((sentAt + receivedAt) / 2)
+      });
+    });
+  });
+}
+
+async function syncServerClock() {
+  const samples = (await Promise.all([
+    requestServerTime(),
+    requestServerTime(),
+    requestServerTime()
+  ])).filter(Boolean);
+  if (!samples.length) return;
+  const bestSample = samples.reduce((best, sample) => sample.rtt < best.rtt ? sample : best);
+  serverClockOffsetMs = bestSample.offset;
+  clockSynchronized = true;
+}
+
+function startClockSync() {
+  syncServerClock();
+  if (clockSyncTimer) clearInterval(clockSyncTimer);
+  clockSyncTimer = setInterval(() => {
+    if (socket.connected) syncServerClock();
+  }, 30_000);
 }
 
 function speechSupported() {
@@ -481,13 +546,18 @@ async function resumeSession() {
 
 socket.on('connect', () => {
   setConnectionStatus(true);
+  startClockSync();
   resumeSession();
 });
 
-socket.on('disconnect', () => setConnectionStatus(false));
+socket.on('disconnect', () => {
+  setConnectionStatus(false);
+  if (clockSyncTimer) clearInterval(clockSyncTimer);
+  clockSyncTimer = null;
+});
 socket.on('connect_error', () => setConnectionStatus(false));
 socket.on('state', state => {
-  if (Number.isFinite(state.serverNow)) {
+  if (!clockSynchronized && Number.isFinite(state.serverNow)) {
     serverClockOffsetMs = state.serverNow - Date.now();
   }
   gameState = state;

@@ -65,8 +65,10 @@ after(async () => {
   }
 });
 
-test('players can complete an anonymous judging round and resume a session', async () => {
+test('four players can complete an anonymous judging round and resume a session', async () => {
   const host = await trackedClient();
+  const synchronizedTime = await emitResult(host, 'sync-time');
+  assert.ok(Number.isFinite(synchronizedTime.serverNow));
   const created = await emitResult(host, 'create-room', { nick: '房主' });
   assert.equal(created.ok, true);
 
@@ -77,17 +79,24 @@ test('players can complete an anonymous judging round and resume a session', asy
   const secondGuest = await trackedClient();
   const secondJoined = await emitResult(secondGuest, 'join-room', { roomId: created.roomId, nick: '玩家乙' });
   assert.equal(secondJoined.ok, true);
-  await waitForState(host, state => state.players.length === 3);
-  await waitForState(guest, state => state.players.length === 3);
-  await waitForState(secondGuest, state => state.players.length === 3);
+
+  const thirdGuest = await trackedClient();
+  const thirdJoined = await emitResult(thirdGuest, 'join-room', { roomId: created.roomId, nick: '玩家丙' });
+  assert.equal(thirdJoined.ok, true);
+  await waitForState(host, state => state.players.length === 4);
+  await waitForState(guest, state => state.players.length === 4);
+  await waitForState(secondGuest, state => state.players.length === 4);
+  await waitForState(thirdGuest, state => state.players.length === 4);
 
   const started = await emitResult(host, 'start-round');
   assert.equal(started.ok, true);
   const guestRound = await waitForState(guest, state => state.round?.phase === 'answering');
   const secondGuestRound = await waitForState(secondGuest, state => state.round?.phase === 'answering');
+  const thirdGuestRound = await waitForState(thirdGuest, state => state.round?.phase === 'answering');
   assert.ok(Number.isFinite(guestRound.serverNow));
   assert.equal(guestRound.round.hand.length, 5);
-  assert.equal(guestRound.round.expectedCount, 2);
+  assert.equal(guestRound.round.expectedCount, 3);
+  assert.equal(guestRound.round.answeringDurationMs, 30_000);
   assert.ok(guestRound.round.answeringEndsAt > Date.now());
 
   const guestAnswer = guestRound.round.hand[0].text;
@@ -97,8 +106,13 @@ test('players can complete an anonymous judging round and resume a session', asy
     cardId: secondGuestRound.round.hand[0].id
   });
   assert.equal(secondSubmitted.ok, true);
+  const thirdSubmitted = await emitResult(thirdGuest, 'submit-answer', {
+    cardId: thirdGuestRound.round.hand[0].id
+  });
+  assert.equal(thirdSubmitted.ok, true);
   const judging = await waitForState(host, state => state.round?.phase === 'judging');
-  assert.equal(judging.round.answers.length, 2);
+  assert.equal(judging.round.answers.length, 3);
+  assert.equal(judging.round.judgingDurationMs, 25_000);
   assert.ok(judging.round.judgingEndsAt > Date.now());
   for (const answer of judging.round.answers) {
     assert.equal(typeof answer.id, 'string');
@@ -115,7 +129,7 @@ test('players can complete an anonymous judging round and resume a session', asy
   assert.equal(selected.ok, true);
   const reveal = await waitForState(guest, state => state.round?.phase === 'reveal');
   assert.equal(reveal.round.winner.playerId, joined.playerId);
-  assert.equal(reveal.round.answers.length, 2);
+  assert.equal(reveal.round.answers.length, 3);
   assert.ok(reveal.round.answers.every(answer => answer.playerId && answer.nick));
   const revealedWinner = reveal.round.answers.find(answer => answer.isWinner);
   assert.equal(revealedWinner.playerId, joined.playerId);
@@ -133,7 +147,7 @@ test('players can complete an anonymous judging round and resume a session', asy
   assert.equal(resumedState.players.find(player => player.id === joined.playerId).connected, true);
 });
 
-test('uses the first card for unanswered players and randomly selects when the judge times out', async () => {
+test('four players handle answer and judging timeouts correctly', async () => {
   const timedServer = createGameServer({ answeringMs: 200, judgingMs: 80, revealMs: 5_000 });
   await new Promise(resolve => timedServer.server.listen(0, '127.0.0.1', resolve));
   const timedUrl = `http://127.0.0.1:${timedServer.server.address().port}`;
@@ -143,7 +157,8 @@ test('uses the first card for unanswered players and randomly selects when the j
     const host = await trackedClient(timedUrl);
     const guest = await trackedClient(timedUrl);
     const secondGuest = await trackedClient(timedUrl);
-    timedClients.push(host, guest, secondGuest);
+    const thirdGuest = await trackedClient(timedUrl);
+    timedClients.push(host, guest, secondGuest, thirdGuest);
 
     const created = await emitResult(host, 'create-room', { nick: '裁判' });
     const joined = await emitResult(guest, 'join-room', { roomId: created.roomId, nick: '玩家一' });
@@ -151,26 +166,34 @@ test('uses the first card for unanswered players and randomly selects when the j
       roomId: created.roomId,
       nick: '玩家二'
     });
-    await waitForState(host, state => state.players.length === 3);
+    const thirdJoined = await emitResult(thirdGuest, 'join-room', {
+      roomId: created.roomId,
+      nick: '玩家三'
+    });
+    await waitForState(host, state => state.players.length === 4);
 
     assert.equal((await emitResult(host, 'start-round')).ok, true);
     const guestRound = await waitForState(guest, state => state.round?.phase === 'answering');
     const secondGuestRound = await waitForState(secondGuest, state => state.round?.phase === 'answering');
+    const thirdGuestRound = await waitForState(thirdGuest, state => state.round?.phase === 'answering');
     const manuallySelectedCard = guestRound.round.hand[1];
-    const automaticallySelectedCard = secondGuestRound.round.hand[0];
+    const automaticallySelectedCards = [
+      secondGuestRound.round.hand[0],
+      thirdGuestRound.round.hand[0]
+    ];
     assert.ok(Number.isFinite(guestRound.round.answeringEndsAt));
     await emitResult(guest, 'submit-answer', { cardId: manuallySelectedCard.id });
 
     const judging = await waitForState(host, state => state.round?.phase === 'judging');
-    assert.equal(judging.round.answers.length, 2);
+    assert.equal(judging.round.answers.length, 3);
     assert.deepEqual(
       new Set(judging.round.answers.map(answer => answer.text)),
-      new Set([manuallySelectedCard.text, automaticallySelectedCard.text])
+      new Set([manuallySelectedCard.text, ...automaticallySelectedCards.map(card => card.text)])
     );
     assert.ok(Number.isFinite(judging.round.judgingEndsAt));
 
     const reveal = await waitForState(host, state => state.round?.phase === 'reveal');
-    assert.ok([joined.playerId, secondJoined.playerId].includes(reveal.round.winner.playerId));
+    assert.ok([joined.playerId, secondJoined.playerId, thirdJoined.playerId].includes(reveal.round.winner.playerId));
     assert.equal(reveal.players.reduce((total, player) => total + player.score, 0), 1);
     assert.ok(reveal.round.answers.every(answer => answer.playerId && answer.nick));
   } finally {

@@ -54,7 +54,13 @@ function createGameServer(options = {}) {
   app.disable('x-powered-by');
   app.get('/health', (_request, response) => response.json({ ok: true, rooms: rooms.size }));
   app.use('/vendor', express.static(path.join(__dirname, 'node_modules', 'lucide', 'dist', 'umd')));
-  app.use(express.static(path.join(__dirname, 'public')));
+  app.use(express.static(path.join(__dirname, 'public'), {
+    setHeaders(response, filePath) {
+      if (/\.(?:html|css|js)$/i.test(filePath)) {
+        response.setHeader('Cache-Control', 'no-store');
+      }
+    }
+  }));
 
   function newRoom(id) {
     return {
@@ -112,7 +118,9 @@ function createGameServer(options = {}) {
       phase: round.phase,
       question: round.question,
       answeringEndsAt: round.answeringEndsAt,
+      answeringDurationMs: answeringMs,
       judgingEndsAt: round.judgingEndsAt,
+      judgingDurationMs: judgingMs,
       submittedCount: round.answers.size,
       expectedCount: round.participantIds.length - 1,
       submittedBySelf: submittedIds.has(player.id),
@@ -129,7 +137,8 @@ function createGameServer(options = {}) {
         nick: winner.nick,
         text: round.answers.get(winner.id),
         filledText: round.question.replace(/_+/, round.answers.get(winner.id)),
-        revealEndsAt: round.revealEndsAt
+        revealEndsAt: round.revealEndsAt,
+        revealDurationMs: revealMs
       } : null
     };
   }
@@ -402,6 +411,10 @@ function createGameServer(options = {}) {
   }
 
   io.on('connection', socket => {
+    socket.on('sync-time', (_payload, callback) => {
+      if (typeof callback === 'function') callback({ serverNow: Date.now() });
+    });
+
     socket.on('create-room', (payload = {}, callback) => {
       if (getSocketPlayer(socket)) return actionResult(callback, false, '你已经在房间中');
       const nick = validNickname(payload.nick);
