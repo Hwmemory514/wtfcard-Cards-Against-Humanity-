@@ -25,6 +25,7 @@ let requestedSpeechRoundId = null;
 let speechWarningShown = false;
 let soundEnabled = localStorage.getItem(SOUND_KEY) !== 'off';
 let countdownTimer = null;
+let serverClockOffsetMs = 0;
 
 function readSession() {
   try {
@@ -202,10 +203,6 @@ function renderGameStage() {
       }
       shell.append(grid);
     }
-    const countdown = node('div', 'countdown');
-    countdown.id = 'roundCountdown';
-    shell.append(countdown);
-    startCountdown(round.answeringEndsAt, '秒后未选玩家将自动打出第一张牌');
   } else if (round.phase === 'judging') {
     shell.append(progressStatus(round, isJudge ? '选出本轮赢家' : '等待裁判选择', `${round.answers.length} 个答案`));
     const grid = node('div', 'answers-grid');
@@ -222,10 +219,7 @@ function renderGameStage() {
       card.append(node('span', '', answer.text));
       grid.append(card);
     }
-    const countdown = node('div', 'countdown');
-    countdown.id = 'roundCountdown';
-    shell.append(grid, countdown);
-    startCountdown(round.judgingEndsAt, '秒后未选择将随机决定胜者');
+    shell.append(grid);
   } else if (round.phase === 'reveal' && round.winner) {
     const reveal = node('div', 'reveal-card');
     reveal.append(
@@ -240,14 +234,23 @@ function renderGameStage() {
       card.append(node('span', '', answer.text), node('span', 'answer-owner', answer.nick));
       answerGrid.append(card);
     }
-    const countdown = node('div', 'countdown');
-    countdown.id = 'roundCountdown';
-    shell.append(reveal, answerHeading, answerGrid, countdown);
-    startCountdown(round.winner.revealEndsAt, '秒后自动进入下一轮');
+    shell.append(reveal, answerHeading, answerGrid);
     speakReveal(round);
   }
 
+  const countdownByPhase = {
+    answering: [round.answeringEndsAt, '秒后未选玩家将自动打出第一张牌'],
+    judging: [round.judgingEndsAt, '秒后未选择将随机决定胜者'],
+    reveal: [round.winner?.revealEndsAt, '秒后自动进入下一轮']
+  };
+  const [countdownEndsAt, countdownSuffix] = countdownByPhase[round.phase] || [];
+  if (Number.isFinite(countdownEndsAt)) {
+    const countdown = node('div', 'countdown');
+    countdown.id = 'roundCountdown';
+    shell.append(countdown);
+  }
   stage.append(shell);
+  startCountdown(countdownEndsAt, countdownSuffix);
   refreshIcons();
 }
 
@@ -330,7 +333,8 @@ function startCountdown(endsAt, suffix) {
   const tick = () => {
     const target = $('roundCountdown');
     if (!target) return stopCountdown();
-    const seconds = Math.max(0, Math.ceil((endsAt - Date.now()) / 1_000));
+    const serverNow = Date.now() + serverClockOffsetMs;
+    const seconds = Math.max(0, Math.ceil((endsAt - serverNow) / 1_000));
     target.textContent = `${seconds} ${suffix}`;
     if (!seconds) stopCountdown();
   };
@@ -483,6 +487,9 @@ socket.on('connect', () => {
 socket.on('disconnect', () => setConnectionStatus(false));
 socket.on('connect_error', () => setConnectionStatus(false));
 socket.on('state', state => {
+  if (Number.isFinite(state.serverNow)) {
+    serverClockOffsetMs = state.serverNow - Date.now();
+  }
   gameState = state;
   renderState();
 });

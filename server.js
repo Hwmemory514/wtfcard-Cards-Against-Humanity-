@@ -137,6 +137,7 @@ function createGameServer(options = {}) {
   function stateFor(room, player) {
     const roundParticipants = new Set(room.round?.participantIds || []);
     return {
+      serverNow: Date.now(),
       roomId: room.id,
       selfPlayerId: player.id,
       hostPlayerId: room.hostPlayerId,

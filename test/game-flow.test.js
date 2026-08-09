@@ -85,6 +85,7 @@ test('players can complete an anonymous judging round and resume a session', asy
   assert.equal(started.ok, true);
   const guestRound = await waitForState(guest, state => state.round?.phase === 'answering');
   const secondGuestRound = await waitForState(secondGuest, state => state.round?.phase === 'answering');
+  assert.ok(Number.isFinite(guestRound.serverNow));
   assert.equal(guestRound.round.hand.length, 5);
   assert.equal(guestRound.round.expectedCount, 2);
   assert.ok(guestRound.round.answeringEndsAt > Date.now());
