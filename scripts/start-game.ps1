@@ -110,6 +110,20 @@ try {
 
   $existingServer = Find-ProcessByCommand -ProcessName 'node.exe' -CommandFragment $serverPath
   if ($existingServer) {
+    $serverProcess = Get-Process -Id $existingServer.ProcessId -ErrorAction SilentlyContinue
+    $latestServerSourceWrite = Get-Item -LiteralPath @(
+      $serverPath,
+      (Join-Path $projectRoot 'game-data.js')
+    ) | Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty LastWriteTime
+    if ($serverProcess -and $serverProcess.StartTime -lt $latestServerSourceWrite) {
+      Write-Host 'Backend files changed. Restarting the game server...' -ForegroundColor Yellow
+      Write-LauncherLog "Restarting stale game server process $($existingServer.ProcessId)."
+      Stop-Process -Id $existingServer.ProcessId -Force
+      Start-Sleep -Milliseconds 500
+      $existingServer = $null
+    }
+  }
+  if ($existingServer) {
     $serverPid = [int]$existingServer.ProcessId
     Write-Host "Game server is already running. PID: $serverPid" -ForegroundColor DarkGray
   } else {

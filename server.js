@@ -10,7 +10,9 @@ const DISCONNECT_GRACE_MS = 30_000;
 const ANSWERING_MS = 30_000;
 const JUDGING_MS = 25_000;
 const REVEAL_MS = 10_000;
+const SERVER_STARTED_AT = new Date().toISOString();
 const graphemeSegmenter = new Intl.Segmenter('zh', { granularity: 'grapheme' });
+const whiteCardCatalog = whiteCards.map((text, index) => ({ id: `white:${index}`, text }));
 
 function graphemeLength(value) {
   let length = 0;
@@ -59,7 +61,11 @@ function createGameServer(options = {}) {
   const rooms = new Map();
 
   app.disable('x-powered-by');
-  app.get('/health', (_request, response) => response.json({ ok: true, rooms: rooms.size }));
+  app.get('/health', (_request, response) => response.json({
+    ok: true,
+    rooms: rooms.size,
+    startedAt: SERVER_STARTED_AT
+  }));
   app.use('/vendor', express.static(path.join(__dirname, 'node_modules', 'lucide', 'dist', 'umd')));
   app.use(express.static(path.join(__dirname, 'public'), {
     setHeaders(response, filePath) {
@@ -77,7 +83,6 @@ function createGameServer(options = {}) {
       judgePlayerId: null,
       announcement: '',
       round: null,
-      whiteDeck: shuffle(whiteCards),
       usedBlackCards: new Set(),
       answeringTimer: null,
       judgingTimer: null,
@@ -132,8 +137,13 @@ function createGameServer(options = {}) {
       expectedCount: round.participantIds.length - 1,
       submittedBySelf: submittedIds.has(player.id),
       answers: round.phase === 'answering' ? [] : answerList,
-      hand: round.phase === 'answering' && !submittedIds.has(player.id)
+      hand: round.phase === 'answering'
         ? (round.hands.get(player.id) || [])
+          .filter(card => card.id !== round.selectedCardIds.get(player.id))
+          .map(card => ({
+            ...card,
+            locked: round.lockedCardIds.get(player.id)?.has(card.id) || false
+          }))
         : [],
       hasFreeCard: round.phase === 'answering'
         && round.freeCardPlayerIds.has(player.id)
@@ -207,11 +217,6 @@ function createGameServer(options = {}) {
     room.answeringTimer = null;
   }
 
-  function drawWhiteCards(room, count) {
-    if (room.whiteDeck.length < count) room.whiteDeck = shuffle(whiteCards);
-    return room.whiteDeck.splice(0, count);
-  }
-
   function drawBlackCard(room) {
     if (room.usedBlackCards.size >= Math.ceil(blackCards.length * 0.7)) {
       room.usedBlackCards.clear();
@@ -231,14 +236,22 @@ function createGameServer(options = {}) {
     }
 
     const hands = new Map();
+    const lockedCardIds = new Map();
     const freeCardPlayerIds = new Set();
+    for (const player of room.players.values()) {
+      player.lockedCards = player.lockedCards.slice(0, 4);
+    }
+    const reservedCardIds = new Set(
+      [...room.players.values()].flatMap(player => player.lockedCards.map(card => card.id))
+    );
+    const availableCards = shuffle(whiteCardCatalog.filter(card => !reservedCardIds.has(card.id)));
     for (const player of participants) {
       if (player.id === room.judgePlayerId) continue;
-      const cards = drawWhiteCards(room, 5).map((text, index) => ({
-        id: `${player.id}:${Date.now()}:${index}:${crypto.randomBytes(3).toString('hex')}`,
-        text
-      }));
+      const retainedCards = player.lockedCards.slice(0, 4);
+      const cards = [...retainedCards, ...availableCards.splice(0, 5 - retainedCards.length)];
+      if (cards.length !== 5) return false;
       hands.set(player.id, cards);
+      lockedCardIds.set(player.id, new Set(retainedCards.map(card => card.id)));
       if (crypto.randomInt(100) < 5) freeCardPlayerIds.add(player.id);
     }
 
@@ -250,8 +263,10 @@ function createGameServer(options = {}) {
       judgePlayerId: room.judgePlayerId,
       participantIds: participants.map(player => player.id),
       hands,
+      lockedCardIds,
       freeCardPlayerIds,
       answers: new Map(),
+      selectedCardIds: new Map(),
       answerOptions: [],
       winnerPlayerId: null,
       answeringEndsAt,
@@ -265,6 +280,18 @@ function createGameServer(options = {}) {
     return true;
   }
 
+  function persistLockedCards(room, round) {
+    for (const playerId of round.participantIds) {
+      const player = room.players.get(playerId);
+      if (!player || playerId === round.judgePlayerId) continue;
+      const lockedIds = round.lockedCardIds.get(playerId) || new Set();
+      const selectedCardId = round.selectedCardIds.get(playerId);
+      player.lockedCards = (round.hands.get(playerId) || [])
+        .filter(card => lockedIds.has(card.id) && card.id !== selectedCardId)
+        .slice(0, 4);
+    }
+  }
+
   function submitDefaultAnswers(room) {
     const round = room.round;
     if (!round || round.phase !== 'answering') return;
@@ -273,14 +300,21 @@ function createGameServer(options = {}) {
     let autoSubmittedCount = 0;
     for (const playerId of round.participantIds) {
       if (playerId === round.judgePlayerId || round.answers.has(playerId)) continue;
-      const firstCard = round.hands.get(playerId)?.[0];
-      if (!firstCard) continue;
-      round.answers.set(playerId, firstCard.text);
+      const hand = round.hands.get(playerId) || [];
+      const lockedIds = round.lockedCardIds.get(playerId) || new Set();
+      let firstUnlockedCard = hand.find(card => !lockedIds.has(card.id));
+      if (!firstUnlockedCard && hand.length) {
+        firstUnlockedCard = hand[hand.length - 1];
+        lockedIds.delete(firstUnlockedCard.id);
+      }
+      if (!firstUnlockedCard) continue;
+      round.answers.set(playerId, firstUnlockedCard.text);
+      round.selectedCardIds.set(playerId, firstUnlockedCard.id);
       autoSubmittedCount += 1;
     }
 
     if (autoSubmittedCount) {
-      emitNotice(room, `选牌时间结束，已为 ${autoSubmittedCount} 名未提交玩家自动打出第一张牌`);
+      emitNotice(room, `选牌时间结束，已为 ${autoSubmittedCount} 名未提交玩家自动打出第一张未锁定牌`);
     }
     finishAnsweringIfReady(room);
     if (room.round?.phase === 'answering') broadcastState(room);
@@ -292,6 +326,7 @@ function createGameServer(options = {}) {
     const expectedIds = round.participantIds.filter(id => id !== round.judgePlayerId);
     if (!expectedIds.every(id => round.answers.has(id))) return;
     clearAnsweringTimer(room);
+    persistLockedCards(room, round);
     round.phase = 'judging';
     round.answeringEndsAt = null;
     round.answerOptions = shuffle(expectedIds).map(playerId => ({
@@ -374,10 +409,13 @@ function createGameServer(options = {}) {
     if (room.round?.participantIds.includes(playerId)) {
       room.round.participantIds = room.round.participantIds.filter(id => id !== playerId);
       room.round.hands.delete(playerId);
+      room.round.lockedCardIds.delete(playerId);
       room.round.freeCardPlayerIds.delete(playerId);
       room.round.answers.delete(playerId);
+      room.round.selectedCardIds.delete(playerId);
       room.round.answerOptions = room.round.answerOptions.filter(option => option.playerId !== playerId);
       if (wasJudge) {
+        persistLockedCards(room, room.round);
         clearAnsweringTimer(room);
         clearJudgingTimer(room);
         clearRevealTimer(room);
@@ -440,6 +478,7 @@ function createGameServer(options = {}) {
         socketId: socket.id,
         nick,
         score: 0,
+        lockedCards: [],
         connected: true,
         disconnectTimer: null
       };
@@ -474,6 +513,7 @@ function createGameServer(options = {}) {
         socketId: socket.id,
         nick,
         score: 0,
+        lockedCards: [],
         connected: true,
         disconnectTimer: null
       };
@@ -508,6 +548,35 @@ function createGameServer(options = {}) {
       actionResult(callback, true, '');
     });
 
+    socket.on('set-card-lock', (payload = {}, callback) => {
+      const context = getSocketPlayer(socket);
+      if (!context) return actionResult(callback, false, '尚未加入房间');
+      const { room, player } = context;
+      const round = room.round;
+      if (!round || round.phase !== 'answering') return actionResult(callback, false, '当前不能锁定手牌');
+      if (!round.participantIds.includes(player.id) || player.id === round.judgePlayerId) {
+        return actionResult(callback, false, '你不是本轮答题玩家');
+      }
+      if (round.selectedCardIds.get(player.id) === payload.cardId) {
+        return actionResult(callback, false, '已经打出的牌不能锁定');
+      }
+      const card = (round.hands.get(player.id) || []).find(item => item.id === payload.cardId);
+      if (!card) return actionResult(callback, false, '这张牌不在你的本轮手牌中');
+
+      const lockedIds = round.lockedCardIds.get(player.id) || new Set();
+      if (payload.locked === true) {
+        if (!lockedIds.has(card.id) && lockedIds.size >= 4) {
+          return actionResult(callback, false, '每名玩家最多保留 4 张牌');
+        }
+        lockedIds.add(card.id);
+      } else {
+        lockedIds.delete(card.id);
+      }
+      round.lockedCardIds.set(player.id, lockedIds);
+      actionResult(callback, true, '', { locked: lockedIds.has(card.id) });
+      broadcastState(room);
+    });
+
     socket.on('submit-answer', (payload = {}, callback) => {
       const context = getSocketPlayer(socket);
       if (!context) return actionResult(callback, false, '尚未加入房间');
@@ -524,6 +593,7 @@ function createGameServer(options = {}) {
         const card = (round.hands.get(player.id) || []).find(item => item.id === payload.cardId);
         if (!card) return actionResult(callback, false, '这张牌不在你的本轮手牌中');
         answer = card.text;
+        round.selectedCardIds.set(player.id, card.id);
       } else {
         const freeText = String(payload.freeText || '').trim();
         if (!round.freeCardPlayerIds.has(player.id)) return actionResult(callback, false, '本轮没有自由卡');
@@ -592,8 +662,10 @@ function createGameServer(options = {}) {
       clearRevealTimer(room);
       room.round = null;
       room.usedBlackCards.clear();
-      room.whiteDeck = shuffle(whiteCards);
-      for (const item of room.players.values()) item.score = 0;
+      for (const item of room.players.values()) {
+        item.score = 0;
+        item.lockedCards = [];
+      }
       room.judgePlayerId = player.id;
       actionResult(callback, true, '');
       emitNotice(room, '游戏已重启，分数已重置');

@@ -43,7 +43,7 @@ function emitResult(client, event, payload = {}) {
 }
 
 before(async () => {
-  gameServer = createGameServer();
+  gameServer = createGameServer({ revealMs: 500 });
   await new Promise(resolve => gameServer.server.listen(0, '127.0.0.1', resolve));
   const { port } = gameServer.server.address();
   baseUrl = `http://127.0.0.1:${port}`;
@@ -65,7 +65,7 @@ after(async () => {
   }
 });
 
-test('four players can complete an anonymous judging round and resume a session', async () => {
+test('four players keep unique locked cards across rounds and resume a session', async () => {
   const host = await trackedClient();
   const synchronizedTime = await emitResult(host, 'sync-time');
   assert.ok(Number.isFinite(synchronizedTime.serverNow));
@@ -106,7 +106,30 @@ test('four players can complete an anonymous judging round and resume a session'
   assert.equal(guestRound.round.expectedCount, 3);
   assert.equal(guestRound.round.answeringDurationMs, 30_000);
   assert.ok(guestRound.round.answeringEndsAt > Date.now());
+  const firstRoundCardIds = [guestRound, secondGuestRound, thirdGuestRound]
+    .flatMap(state => state.round.hand.map(card => card.id));
+  assert.equal(new Set(firstRoundCardIds).size, 15);
 
+  const retainedCards = secondGuestRound.round.hand.slice(1, 5);
+  for (const card of retainedCards) {
+    const locked = await emitResult(secondGuest, 'set-card-lock', { cardId: card.id, locked: true });
+    assert.equal(locked.ok, true);
+    await waitForState(secondGuest, state => (
+      state.round?.hand.find(item => item.id === card.id)?.locked === true
+    ));
+  }
+  const fifthLock = await emitResult(secondGuest, 'set-card-lock', {
+    cardId: secondGuestRound.round.hand[0].id,
+    locked: true
+  });
+  assert.equal(fifthLock.ok, false);
+  const forgedLock = await emitResult(guest, 'set-card-lock', {
+    cardId: retainedCards[0].id,
+    locked: true
+  });
+  assert.equal(forgedLock.ok, false);
+
+  const firstRoundId = guestRound.round.id;
   const guestAnswer = guestRound.round.hand[0].text;
   const submitted = await emitResult(guest, 'submit-answer', { cardId: guestRound.round.hand[0].id });
   assert.equal(submitted.ok, true);
@@ -144,6 +167,21 @@ test('four players can complete an anonymous judging round and resume a session'
   assert.equal(revealedWinner.nick, '玩家');
   assert.equal(reveal.players.find(player => player.id === joined.playerId).score, 1);
 
+  const nextSecondGuestRound = await waitForState(secondGuest, state => (
+    state.round?.phase === 'answering' && state.round.id !== firstRoundId
+  ));
+  const nextHostRound = await waitForState(host, state => state.round?.id === nextSecondGuestRound.round.id);
+  const nextThirdGuestRound = await waitForState(thirdGuest, state => state.round?.id === nextSecondGuestRound.round.id);
+  assert.equal(nextSecondGuestRound.round.hand.length, 5);
+  for (const retainedCard of retainedCards) {
+    const card = nextSecondGuestRound.round.hand.find(item => item.id === retainedCard.id);
+    assert.ok(card);
+    assert.equal(card.locked, true);
+  }
+  const nextRoundCardIds = [nextHostRound, nextSecondGuestRound, nextThirdGuestRound]
+    .flatMap(state => state.round.hand.map(card => card.id));
+  assert.equal(new Set(nextRoundCardIds).size, 15);
+
   guest.socket.disconnect();
   const resumedGuest = await trackedClient();
   const resumed = await emitResult(resumedGuest, 'resume-room', {
@@ -156,7 +194,7 @@ test('four players can complete an anonymous judging round and resume a session'
 });
 
 test('four players handle answer and judging timeouts correctly', async () => {
-  const timedServer = createGameServer({ answeringMs: 200, judgingMs: 80, revealMs: 5_000 });
+  const timedServer = createGameServer({ answeringMs: 600, judgingMs: 80, revealMs: 5_000 });
   await new Promise(resolve => timedServer.server.listen(0, '127.0.0.1', resolve));
   const timedUrl = `http://127.0.0.1:${timedServer.server.address().port}`;
   const timedClients = [];
@@ -184,9 +222,16 @@ test('four players handle answer and judging timeouts correctly', async () => {
     const guestRound = await waitForState(guest, state => state.round?.phase === 'answering');
     const secondGuestRound = await waitForState(secondGuest, state => state.round?.phase === 'answering');
     const thirdGuestRound = await waitForState(thirdGuest, state => state.round?.phase === 'answering');
+    const dealtCardIds = [guestRound, secondGuestRound, thirdGuestRound]
+      .flatMap(state => state.round.hand.map(card => card.id));
+    assert.equal(new Set(dealtCardIds).size, 15);
     const manuallySelectedCard = guestRound.round.hand[1];
+    for (const card of secondGuestRound.round.hand.slice(0, 4)) {
+      const locked = await emitResult(secondGuest, 'set-card-lock', { cardId: card.id, locked: true });
+      assert.equal(locked.ok, true);
+    }
     const automaticallySelectedCards = [
-      secondGuestRound.round.hand[0],
+      secondGuestRound.round.hand[4],
       thirdGuestRound.round.hand[0]
     ];
     assert.ok(Number.isFinite(guestRound.round.answeringEndsAt));

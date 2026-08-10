@@ -238,18 +238,44 @@ function renderGameStage() {
   } else if (round.phase === 'answering') {
     if (isJudge) {
       shell.append(progressStatus(round, '等待玩家出牌', `${round.submittedCount} / ${round.expectedCount} 已提交`));
-    } else if (round.submittedBySelf) {
-      shell.append(progressStatus(round, '答案已提交', `${round.submittedCount} / ${round.expectedCount} 已提交`));
     } else {
-      shell.append(progressStatus(round, '选择一张答案', `${round.submittedCount} / ${round.expectedCount} 已提交`));
+      shell.append(progressStatus(
+        round,
+        round.submittedBySelf ? '答案已提交，可继续锁定剩余手牌' : '选择一张答案',
+        `${round.submittedCount} / ${round.expectedCount} 已提交`
+      ));
       const grid = node('div', 'hand-grid');
+      const lockedCardCount = round.hand.filter(card => card.locked).length;
       for (const card of round.hand) {
-        const button = node('button', 'white-card', card.text);
-        button.type = 'button';
-        button.addEventListener('click', () => submitCard(card.id));
-        grid.append(button);
+        const cardShell = node('div', `hand-card${card.locked ? ' locked' : ''}`);
+        const playButton = node('button', 'white-card', card.text);
+        playButton.type = 'button';
+        playButton.disabled = round.submittedBySelf;
+        playButton.addEventListener('click', () => submitCard(card.id));
+
+        const lockButton = node('button', 'card-lock-btn');
+        lockButton.type = 'button';
+        const lockLimitReached = !card.locked && lockedCardCount >= 4;
+        lockButton.disabled = lockLimitReached;
+        lockButton.title = card.locked
+          ? '取消保留'
+          : lockLimitReached ? '最多保留 4 张牌' : '保留到下一回合';
+        lockButton.setAttribute('aria-label', `${lockButton.title}：${card.text}`);
+        lockButton.setAttribute('aria-pressed', String(card.locked));
+        const lockIcon = node('i');
+        lockIcon.dataset.lucide = 'lock';
+        lockIcon.setAttribute('aria-hidden', 'true');
+        lockButton.append(lockIcon);
+        lockButton.addEventListener('click', async () => {
+          lockButton.disabled = true;
+          const result = await setCardLock(card.id, !card.locked);
+          if (!result) lockButton.disabled = false;
+        });
+
+        cardShell.append(playButton, lockButton);
+        grid.append(cardShell);
       }
-      if (round.hasFreeCard) {
+      if (round.hasFreeCard && !round.submittedBySelf) {
         const freeButton = node('button', 'white-card free-card', '自由卡：输入你的神回复');
         freeButton.type = 'button';
         freeButton.addEventListener('click', () => {
@@ -297,7 +323,7 @@ function renderGameStage() {
   }
 
   const countdownByPhase = {
-    answering: [round.answeringEndsAt, '秒后未选玩家将自动打出第一张牌', round.answeringDurationMs],
+    answering: [round.answeringEndsAt, '秒后未选玩家将自动打出第一张未锁定牌', round.answeringDurationMs],
     judging: [round.judgingEndsAt, '秒后未选择将随机决定胜者', round.judgingDurationMs],
     reveal: [round.winner?.revealEndsAt, '秒后自动进入下一轮', round.winner?.revealDurationMs]
   };
@@ -385,6 +411,12 @@ async function runAction(event, payload = {}) {
 async function submitCard(cardId) {
   const result = await runAction('submit-answer', { cardId });
   if (result) showToast('答案已提交', 'success');
+}
+
+async function setCardLock(cardId, locked) {
+  const result = await runAction('set-card-lock', { cardId, locked });
+  if (result) showToast(locked ? '已保留到下一回合' : '已取消保留', 'success');
+  return result;
 }
 
 async function selectWinner(answerId) {
