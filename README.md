@@ -1,4 +1,8 @@
 # WTF Card Online 使用说明
+---
+试玩版：https://wtfcard-cards-against-humanity.onrender.com
+按照最后的教程建立的服务器地址，由于是使用免费节点，网络性能不值得期待。但是可以一试
+---
 
 ## 2026/8/10 更新
 
